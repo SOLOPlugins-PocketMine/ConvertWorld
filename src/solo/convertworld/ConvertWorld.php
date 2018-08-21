@@ -62,6 +62,9 @@ class ConvertWorld extends PluginBase{
 				$target_name = array_shift($args);
 				if($target_name === null) return $this->usage();
 
+				$format = array_shift($args);
+				if($format === null) return $this->usage();
+
 				$source = $this->plugin->getServer()->getLevelByName($source_name);
 				if(!$source instanceof Level){
 					// try to load level
@@ -72,9 +75,6 @@ class ConvertWorld extends PluginBase{
 					}
 					$source = $this->plugin->getServer()->getLevelByName($source_name);
 				}
-
-				$format = array_shift($args);
-				if($format === null) return $this->usage();
 
 				$this->message("Starting to convert \"" . $source_name . "\" to \"" . $target_name . "\"...");
 
