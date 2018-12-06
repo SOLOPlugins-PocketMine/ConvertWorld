@@ -4,27 +4,32 @@ declare(strict_types=1);
 
 namespace solo\convertworld;
 
-use pocketmine\Player;
 use pocketmine\command\Command;
 use pocketmine\command\CommandSender;
 use pocketmine\event\level\LevelInitEvent;
 use pocketmine\event\level\LevelLoadEvent;
-use pocketmine\level\Level;
 use pocketmine\level\format\Chunk;
 use pocketmine\level\format\io\LevelProviderManager;
+use pocketmine\level\Level;
+use pocketmine\Player;
 use pocketmine\plugin\PluginBase;
 use pocketmine\scheduler\Task;
+use pocketmine\utils\Config;
 
 class ConvertWorld extends PluginBase{
 
 	public static $prefix = "§b§l[ConvertWorld] §r§7";
 
 	public static $LEVEL_PATH;
-
 	public static $CHUNK_COPY_PER_TICK = 200;
+	public static $JE_to_BE_map;
+	public static $BE_to_JE_map;
 
 	protected function onEnable(){
 		self::$LEVEL_PATH = $this->getServer()->getDataPath() . "worlds/";
+
+		self::$JE_to_BE_map = (new Config($this->getDataFolder() . "JE_to_BE_map.yml", Config::YAML))->getAll();
+		self::$BE_to_JE_map = (new Config($this->getDataFolder() . "BE_to_JE_map.yml", Config::YAML))->getAll();
 
 		new ConvertService($this);
 
@@ -33,7 +38,7 @@ class ConvertWorld extends PluginBase{
 			private $temporalSender;
 
 			public function __construct(ConvertWorld $plugin){
-				parent::__construct("convertworld", "convert world's format to OO - anvil, mcregion, pmanvil, leveldb", "/convertworld <source> <target> <format>");
+				parent::__construct("convertworld", "convert world's format to OO - anvil, mcregion, pmanvil, leveldb", "/convertworld <source> <target> <format> [<source edition> <target edition>]");
 
 				$this->plugin = $plugin;
 			}
@@ -44,6 +49,7 @@ class ConvertWorld extends PluginBase{
 
 			public function usage(){
 				$this->temporalSender->sendMessage(ConvertWorld::$prefix . $this->getUsage() . " - " . $this->getDescription());
+				$this->temporalSender->sendMessage(ConvertWorld::$prefix . "If you want to convert block id/data, <source edition> and <target edition> would be one of this: \"BE JE\" or \"JE BE\"");
 			}
 
 			public function execute(CommandSender $sender, string $label, array $args) : bool{
@@ -65,6 +71,29 @@ class ConvertWorld extends PluginBase{
 				$format = array_shift($args);
 				if($format === null) return $this->usage();
 
+				$code_map = [];
+
+				if(!empty($args)){
+					$source_edition = array_shift($args);
+					$target_edition = array_shift($args);
+
+					if(empty($source_edition) or empty($target_edition)) return $this->usage();
+
+					$source_edition = strtolower($source_edition);
+					$target_edition = strtolower($target_edition);
+
+					$je = ["je", "java edition", "java_edition", "javaedition"];
+					$be = ["be", "bedrock edition", "bedrock_edition", "bedrockedition", "pe", "pocket edition", "pocket_edition", "pocketedition"];
+
+					if(array_search($source_edition, $je) !== false and array_search($target_edition, $be) !== false){
+						$code_map = ConvertWorld::$JE_to_BE_map;
+					}else if(array_search($source_edition, $be) !== false and array_search($target_edition, $je) !== false){
+						$code_map = ConvertWorld::$BE_to_JE_map;
+					}else{
+						return $this->usage();
+					}
+				}
+
 				$source = $this->plugin->getServer()->getLevelByName($source_name);
 				if(!$source instanceof Level){
 					// try to load level
@@ -79,14 +108,17 @@ class ConvertWorld extends PluginBase{
 				$this->message("Starting to convert \"" . $source_name . "\" to \"" . $target_name . "\"...");
 
 				try{
-					$this->plugin->convert($source, $target_name, $format, function(int $x, int $z) use($sender){
-						if($sender instanceof Player)
-							$sender->sendPopup("§aConvert chunk ... [" . $x . ":" . $z . "]");
-						else
+					$this->plugin->convert(
+						$source,
+						$target_name,
+						$format,
+						$code_map,
+						function(int $x, int $z){
 							echo "Convert chunk ... [" . $x . ":" . $z . "]" . "\r";
-					}, function() use($sender){
-						$sender->sendMessage(ConvertWorld::$prefix . "Successfully converted.");
-					});
+						},
+						function() use($sender){
+							$sender->sendMessage(ConvertWorld::$prefix . "Successfully converted.");
+						});
 				}catch(\InvalidStateException $e){
 					$this->message("An error occured while cloning world : " . $e->getMessage());
 					$this->message("See console for getting more information.");
@@ -162,7 +194,7 @@ class ConvertWorld extends PluginBase{
 		}
 	}
 
-	public function convert(Level $source, string $target_name, string $format = "pmanvil", callable $floodFill_callback = null, callable $finish_callback = null){
+	public function convert(Level $source, string $target_name, string $format = "pmanvil", array $code_map = [], callable $floodFill_callback = null, callable $finish_callback = null){
 		$server = $this->getServer();
 
 		$source_path = self::$LEVEL_PATH . $source->getFolderName() . "/";
@@ -212,17 +244,34 @@ class ConvertWorld extends PluginBase{
 
 		// convert start ...
 
-		$convertProcess = $this->floodFill(function(int $x, int $z) use($source, $target, $floodFill_callback) : bool{
-			if(!$source->loadChunk($x, $z, false)) return false;
+		$convertProcess = $this->floodFill(function(int $chunkX, int $chunkZ) use($source, $target, $code_map, $floodFill_callback) : bool{
+			if(!$source->loadChunk($chunkX, $chunkZ, false)) return false;
 
-			$source_chunk = $source->getChunk($x, $z);
-
+			$source_chunk = $source->getChunk($chunkX, $chunkZ);
 			$target_chunk = Chunk::fastDeserialize($source_chunk->fastSerialize());
 
-			$target->setChunk($x, $z, $target_chunk);
+			$maxY = $target_chunk->getMaxY();
+
+			if(!empty($code_map)) for($y = 0; $y < $maxY; $y++){
+				for($z = 0; $z < 16; $z++){
+					for($x = 0; $x < 16; $x++){
+						$blockId = $target_chunk->getBlockId($x, $y, $z);
+						$blockData = $target_chunk->getBlockData($x, $y, $z);
+
+						if(isset($code_map[$blockId . ":" . $blockData])){
+							$id_data = explode(":", $code_map[$blockId . ":" . $blockData]);
+							$target_chunk->setBlock($x, $y, $z, intval($id_data[0]), intval($id_data[1] ?? 0));
+						}else if(isset($code_map[$blockId])){
+							$target_chunk->setBlock($x, $y, $z, $code_map[$blockId], $blockData);
+						}
+					}
+				}
+			}
+
+			$target->setChunk($chunkX, $chunkZ, $target_chunk);
 
 			if($floodFill_callback !== null){
-				$floodFill_callback($x, $z);
+				$floodFill_callback($chunkX, $chunkZ);
 			}
 
 			return true;
