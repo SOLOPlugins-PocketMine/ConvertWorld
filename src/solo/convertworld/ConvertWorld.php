@@ -87,11 +87,11 @@ class ConvertWorld extends PluginBase{
 					}, function() use($sender){
 						$sender->sendMessage(ConvertWorld::$prefix . "Successfully converted.");
 					});
-				}catch(\Throwable $e){
+				}catch(\InvalidStateException $e){
 					$this->message("An error occured while cloning world : " . $e->getMessage());
 					$this->message("See console for getting more information.");
 
-					throw $e;
+					$this->plugin->getServer()->getLogger()->logException($e);
 				}
 			}
 		});
@@ -105,7 +105,7 @@ class ConvertWorld extends PluginBase{
 		return $x . ":" . $z;
 	}
 
-	public function floodFill(callable $callback, int $depth = 10, int $x = 0, int $z = 0, \stdClass $storage = null) : \Generator{
+	public function floodFill(callable $callback, int $depth = 10, int $x = 1, int $z = 1, \stdClass $storage = null) : \Generator{
 		$recursiveCalled = true;
 		$hash = $this->hash($x, $z);
 
@@ -115,10 +115,11 @@ class ConvertWorld extends PluginBase{
 			$storage->checked = [];
 			$storage->next = [];
 
-			$recursiveCalled = false;
-
 			$storage->depth[$hash] = $depth;
+
+			$recursiveCalled = false;
 		}
+
 		if(isset($storage->checked[$hash])) return;
 		$storage->checked[$hash] = true;
 
@@ -133,8 +134,6 @@ class ConvertWorld extends PluginBase{
 		] as $near){
 			$_hash = $this->hash(...$near);
 			$storage->depth[$_hash] = $depth;
-
-			/// echo $depth . " : " . $_hash . ($w ? " EXIST" : "") . PHP_EOL;
 			$storage->next[] = $near;
 		}
 
@@ -193,7 +192,7 @@ class ConvertWorld extends PluginBase{
 			$target_path,
 			$target_name,
 			$source->getSeed(),
-			$source->getProvider()->getGenerator(),
+			$source->getProvider()->getLevelData()->getGenerator(),
 			$options
 		);
 
@@ -208,8 +207,8 @@ class ConvertWorld extends PluginBase{
 
 		$target->setTickRate($server->getProperty("level-settings.base-tick-rate", 1));
 
-		$server->getPluginManager()->callEvent(new LevelInitEvent($target));
-		$server->getPluginManager()->callEvent(new LevelLoadEvent($target));
+		(new LevelInitEvent($target))->call();
+		(new LevelLoadEvent($target))->call();
 
 		// convert start ...
 
@@ -225,6 +224,7 @@ class ConvertWorld extends PluginBase{
 			if($floodFill_callback !== null){
 				$floodFill_callback($x, $z);
 			}
+
 			return true;
 		});
 
