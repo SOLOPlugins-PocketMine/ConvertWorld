@@ -1,5 +1,5 @@
 name: ConvertWorld
 author: solo
-version: 0.0.2
+version: 0.0.3
 main: solo\convertworld\ConvertWorld
 api: [3.0.0, 3.1.0, 3.2.0, 3.3.0, 3.4.0, 4.0.0]
